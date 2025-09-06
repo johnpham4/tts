@@ -138,29 +138,19 @@ if __name__ == '__main__':
     recorder = AudioToTextRecorder(**recorder_config)
 
     def transcriber_thread():
-        global displayed_text
         while True:
             start_transcription_event.wait()
             text = "└─ transcribing ... "
             text = fill_cli_line(text)
             print (f"\r{text}", end='', flush=True)
             sentence = recorder.transcribe()
-
-            # Nếu câu rỗng hoặc chỉ có khoảng trắng, có thể là khoảng cách im lặng
-            if not sentence.strip():
-                silence_message = "<silence>"
-                print (Style.RESET_ALL + "\r└─ " + Fore.RED + silence_message + Style.RESET_ALL)
-                add_message_to_queue("silence", silence_message)
-            else:
-                print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
-                add_message_to_queue("full", sentence)
-
-            # Reset displayed text sau mỗi transcription
-            displayed_text = ""
+            print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
+            add_message_to_queue("full", sentence)
             start_transcription_event.clear()
             if WAIT_FOR_START_COMMAND:
                 print("waiting for start command")
                 print ("└─ ... ", end='', flush=True)
+
 
     def recorder_thread():
         global first_chunk
