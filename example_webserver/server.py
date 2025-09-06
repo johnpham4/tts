@@ -119,12 +119,12 @@ if __name__ == '__main__':
         'spinner': False,
         'model': 'small.en',
         'language': 'en',
-        'silero_sensitivity': 0.01,
-        'webrtc_sensitivity': 3,
+        'silero_sensitivity': 0.05,  # Tăng từ 0.01 để ít nhạy hơn
+        'webrtc_sensitivity': 2,     # Giảm từ 3 để ít nhạy hơn
         'silero_use_onnx': False,
-        'post_speech_silence_duration': 1.2,
-        'min_length_of_recording': 0.2,
-        'min_gap_between_recordings': 0,
+        'post_speech_silence_duration': 3.0,  # Tăng từ 1.2 lên 3 giây
+        'min_length_of_recording': 0.5,       # Tăng từ 0.2 lên 0.5 giây
+        'min_gap_between_recordings': 1.0,    # Thêm khoảng cách 1 giây giữa các lần ghi
         'enable_realtime_transcription': True,
         'realtime_processing_pause': 0,
         'realtime_model_type': 'tiny.en',
@@ -138,14 +138,25 @@ if __name__ == '__main__':
     recorder = AudioToTextRecorder(**recorder_config)
 
     def transcriber_thread():
+        global displayed_text
         while True:
             start_transcription_event.wait()
             text = "└─ transcribing ... "
             text = fill_cli_line(text)
             print (f"\r{text}", end='', flush=True)
             sentence = recorder.transcribe()
-            print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
-            add_message_to_queue("full", sentence)
+
+            # Nếu câu rỗng hoặc chỉ có khoảng trắng, có thể là khoảng cách im lặng
+            if not sentence.strip():
+                silence_message = "<silence>"
+                print (Style.RESET_ALL + "\r└─ " + Fore.RED + silence_message + Style.RESET_ALL)
+                add_message_to_queue("silence", silence_message)
+            else:
+                print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
+                add_message_to_queue("full", sentence)
+
+            # Reset displayed text sau mỗi transcription
+            displayed_text = ""
             start_transcription_event.clear()
             if WAIT_FOR_START_COMMAND:
                 print("waiting for start command")
