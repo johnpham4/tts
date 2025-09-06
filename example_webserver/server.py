@@ -76,19 +76,75 @@ if __name__ == '__main__':
         columns, _ = shutil.get_terminal_size()
         return text.ljust(columns)[-columns:]
 
+    # Text tích lũy từ đầu đến cuối chương trình
+    complete_session_text = ""
+    silence_timer = None
+    is_currently_speaking = False
+
+    def add_silence_token():
+        global complete_session_text, silence_timer
+        if not is_currently_speaking:  # Chỉ thêm khi không đang nói
+            complete_session_text += " <silence>"
+            print(f"\r{complete_session_text}", end='', flush=True)
+            add_message_to_queue("realtime", complete_session_text)
+
+            # Lên lịch silence token tiếp theo sau 2 giây
+            silence_timer = threading.Timer(2.0, add_silence_token)
+            silence_timer.start()
+
     def text_detected(text):
-        global displayed_text, first_chunk
+        global complete_session_text, silence_timer, is_currently_speaking
 
-        if text != displayed_text:
-            first_chunk = False
-            displayed_text = text
-            add_message_to_queue("realtime", text)
+        is_currently_speaking = True
 
-            message = fill_cli_line(text)
+        # Hủy silence timer khi có voice
+        if silence_timer:
+            silence_timer.cancel()
+            silence_timer = None
 
-            message ="└─ " + Fore.CYAN + message[:-3] + Style.RESET_ALL
-            print(f"\r{message}", end='', flush=True)
+        # Cập nhật text - thay thế từ cuối với text mới (realtime)
+        if text:
+            # Tìm vị trí của silence token cuối cùng
+            last_silence_pos = complete_session_text.rfind("<silence>")
+            if last_silence_pos != -1:
+                # Có silence token, thêm text sau silence token cuối
+                complete_session_text = complete_session_text[:last_silence_pos + 9] + " " + text
+            else:
+                # Không có silence token, thêm vào cuối
+                if complete_session_text and not complete_session_text.endswith(" "):
+                    complete_session_text += " " + text
+                else:
+                    complete_session_text += text
 
+            print(f"\r{complete_session_text}", end='', flush=True)
+            add_message_to_queue("realtime", complete_session_text)
+
+    def recording_started():
+        global is_currently_speaking
+        is_currently_speaking = True
+
+    def vad_detect_started():
+        global silence_timer, is_currently_speaking
+        is_currently_speaking = True
+        if silence_timer:
+            silence_timer.cancel()
+            silence_timer = None
+
+    def recording_stopped():
+        global is_currently_speaking, silence_timer
+        is_currently_speaking = False
+
+        # Bắt đầu đếm silence sau 2 giây
+        if silence_timer:
+            silence_timer.cancel()
+        silence_timer = threading.Timer(2.0, add_silence_token)
+        silence_timer.start()
+
+    def wakeword_detect_started():
+        add_message_to_queue("wakeword_start", "")
+
+    def transcription_started(audio_data):
+        add_message_to_queue("transcript_start", "")
 
     async def broadcast(message_obj):
         if connected_clients:
@@ -101,18 +157,6 @@ if __name__ == '__main__':
                 message = message_queue.get()
                 await broadcast(message)
             await asyncio.sleep(0.02)
-
-    def recording_started():
-        add_message_to_queue("record_start", "")
-
-    def vad_detect_started():
-        add_message_to_queue("vad_start", "")
-
-    def wakeword_detect_started():
-        add_message_to_queue("wakeword_start", "")
-
-    def transcription_started(audio_data):
-        add_message_to_queue("transcript_start", "")
 
     recorder_config = {
         'spinner': False,
@@ -129,10 +173,11 @@ if __name__ == '__main__':
         'realtime_processing_pause': 0,
         'realtime_model_type': 'tiny.en',
         'on_realtime_transcription_stabilized': text_detected,
-        'on_recording_start' : recording_started,
-        'on_vad_detect_start' : vad_detect_started,
-        'on_wakeword_detection_start' : wakeword_detect_started,
-        'on_transcription_start' : transcription_started,
+        'on_recording_start': recording_started,
+        'on_recording_stop': recording_stopped,  # Thêm callback khi ngưng recording
+        'on_vad_detect_start': vad_detect_started,
+        'on_wakeword_detection_start': wakeword_detect_started,
+        'on_transcription_start': transcription_started,
     }
 
     recorder = AudioToTextRecorder(**recorder_config)
@@ -140,16 +185,13 @@ if __name__ == '__main__':
     def transcriber_thread():
         while True:
             start_transcription_event.wait()
-            text = "└─ transcribing ... "
-            text = fill_cli_line(text)
-            print (f"\r{text}", end='', flush=True)
+            # Không in gì cả, để cho realtime text handling
             sentence = recorder.transcribe()
-            print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
+            # Cũng không in sentence màu vàng
             add_message_to_queue("full", sentence)
             start_transcription_event.clear()
             if WAIT_FOR_START_COMMAND:
-                print("waiting for start command")
-                print ("└─ ... ", end='', flush=True)
+                pass  # Không in waiting message
 
 
     def recorder_thread():
@@ -159,8 +201,7 @@ if __name__ == '__main__':
             first_chunk = True
             if WAIT_FOR_START_COMMAND:
                 start_recording_event.wait()
-            print("waiting for sentence")
-            print ("└─ ... ", end='', flush=True)
+            # Không in "waiting for sentence"
             recorder.wait_audio()
             start_transcription_event.set()
             start_recording_event.clear()
