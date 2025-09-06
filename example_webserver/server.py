@@ -35,9 +35,9 @@ if __name__ == '__main__':
     def clear_console():
         os.system('clear' if os.name == 'posix' else 'cls')
 
-    async def handler(websocket, path):
+    async def handler(websocket):
 
-        print ("\r└─ OK")
+        print ("\r└─ Client connected")
         if WAIT_FOR_START_COMMAND:
             print("waiting for start command")
             print ("└─ ... ", end='', flush=True)
@@ -45,12 +45,11 @@ if __name__ == '__main__':
         connected_clients.add(websocket)
 
         try:
-            while True:
-                async for message in websocket:
-                    data = json.loads(message)
-                    if data.get("type") == "command" and data.get("content") == "start-recording":
-                        print ("\r└─ OK")
-                        start_recording_event.set()
+            async for message in websocket:
+                data = json.loads(message)
+                if data.get("type") == "command" and data.get("content") == "start-recording":
+                    print ("\r└─ OK")
+                    start_recording_event.set()
 
         except json.JSONDecodeError:
             print (Fore.RED + "STT Received an invalid JSON message." + Style.RESET_ALL)
@@ -61,7 +60,7 @@ if __name__ == '__main__':
         finally:
 
             print("client disconnected")
-            connected_clients.remove(websocket)
+            connected_clients.discard(websocket)
             print ("waiting for clients")
             print ("└─ ... ", end='', flush=True)
 
@@ -112,11 +111,12 @@ if __name__ == '__main__':
     def wakeword_detect_started():
         add_message_to_queue("wakeword_start", "")
 
-    def transcription_started():
+    def transcription_started(audio_data):
         add_message_to_queue("transcript_start", "")
 
     recorder_config = {
         'spinner': False,
+        'use_microphone': True,  # Thay đổi thành True để dùng microphone
         'model': 'small.en',
         'language': 'en',
         'silero_sensitivity': 0.05,  # Tăng từ 0.01 để ít nhạy hơn
@@ -155,9 +155,7 @@ if __name__ == '__main__':
     def recorder_thread():
         global first_chunk
         while True:
-            if not len(connected_clients) > 0:
-                time.sleep(0.1)
-                continue
+            # Không cần chờ client nữa, chạy trực tiếp
             first_chunk = True
             if WAIT_FOR_START_COMMAND:
                 start_recording_event.wait()
@@ -171,12 +169,25 @@ if __name__ == '__main__':
     threading.Thread(target=transcriber_thread, daemon=True).start()
 
     print ("\r└─ OK")
-    print ("waiting for clients")
+    print ("🎤 Microphone ready! Start speaking...")
+    print ("Press Ctrl+C to stop")
     print ("└─ ... ", end='', flush=True)
 
-    async def main():
-        start_server = websockets.serve(handler, server, port)
-        await start_server
-        await send_handler()
+    try:
+        # Chạy WebSocket server trong background
+        async def main():
+            start_server = websockets.serve(handler, server, port)
+            await start_server
+            await send_handler()
 
-    asyncio.run(main())
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\n\nShutting down...")
+    finally:
+        if recorder:
+            try:
+                recorder.stop()
+                recorder.shutdown()
+                print("Recorder cleaned up successfully")
+            except:
+                pass
