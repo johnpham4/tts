@@ -27,7 +27,7 @@ if __name__ == '__main__':
     first_chunk = True
     full_sentences = []
     displayed_text = ""
-    message_queue = queue.Queue() 
+    message_queue = queue.Queue()
     start_recording_event = threading.Event()
     start_transcription_event = threading.Event()
     connected_clients = set()
@@ -35,9 +35,8 @@ if __name__ == '__main__':
     def clear_console():
         os.system('clear' if os.name == 'posix' else 'cls')
 
-    async def handler(websocket, path):
-
-        print ("\r└─ OK")
+    async def handler(websocket):
+        print ("\r└─ Client connected")
         if WAIT_FOR_START_COMMAND:
             print("waiting for start command")
             print ("└─ ... ", end='', flush=True)
@@ -45,12 +44,11 @@ if __name__ == '__main__':
         connected_clients.add(websocket)
 
         try:
-            while True:
-                async for message in websocket:
-                    data = json.loads(message)
-                    if data.get("type") == "command" and data.get("content") == "start-recording":
-                        print ("\r└─ OK")
-                        start_recording_event.set() 
+            async for message in websocket:
+                data = json.loads(message)
+                if data.get("type") == "command" and data.get("content") == "start-recording":
+                    print ("\r└─ OK")
+                    start_recording_event.set()
 
         except json.JSONDecodeError:
             print (Fore.RED + "STT Received an invalid JSON message." + Style.RESET_ALL)
@@ -59,9 +57,8 @@ if __name__ == '__main__':
         except websockets.exceptions.ConnectionClosedOK:
             print("connection closed.")
         finally:
-
             print("client disconnected")
-            connected_clients.remove(websocket)
+            connected_clients.discard(websocket)
             print ("waiting for clients")
             print ("└─ ... ", end='', flush=True)
 
@@ -71,7 +68,7 @@ if __name__ == '__main__':
             "type": type,
             "content": content
         }
-        message_queue.put(message)    
+        message_queue.put(message)
 
     def fill_cli_line(text):
         columns, _ = shutil.get_terminal_size()
@@ -104,9 +101,11 @@ if __name__ == '__main__':
             await asyncio.sleep(0.02)
 
     def recording_started():
+        print("\n🎤 Recording started! Voice detected.")
         add_message_to_queue("record_start", "")
 
     def vad_detect_started():
+        print("\n🎵 VAD detected voice!")
         add_message_to_queue("vad_start", "")
 
     def wakeword_detect_started():
@@ -117,16 +116,17 @@ if __name__ == '__main__':
 
     recorder_config = {
         'spinner': False,
+        'use_microphone': True,
         'model': 'small.en',
         'language': 'en',
-        'silero_sensitivity': 0.01,
-        'webrtc_sensitivity': 3,
+        'silero_sensitivity': 0.3,   # Tăng từ 0.1 lên 0.3 để ít nhạy cảm hơn
+        'webrtc_sensitivity': 2,     # Tăng lại từ 1 lên 2
         'silero_use_onnx': False,
-        'post_speech_silence_duration': 1.2,
-        'min_length_of_recording': 0.2,
-        'min_gap_between_recordings': 0,
+        'post_speech_silence_duration': 2.0,  # Tăng từ 1.0 lên 2.0 giây
+        'min_length_of_recording': 0.5,       # Tăng từ 0.1 lên 0.5 giây
+        'min_gap_between_recordings': 0.3,    # Thêm gap 0.3 giây
         'enable_realtime_transcription': True,
-        'realtime_processing_pause': 0,
+        'realtime_processing_pause': 0.1,     # Thêm pause 0.1 giây
         'realtime_model_type': 'tiny.en',
         'on_realtime_transcription_stabilized': text_detected,
         'on_recording_start' : recording_started,
@@ -159,7 +159,7 @@ if __name__ == '__main__':
                 continue
             first_chunk = True
             if WAIT_FOR_START_COMMAND:
-                start_recording_event.wait() 
+                start_recording_event.wait()
             print("waiting for sentence")
             print ("└─ ... ", end='', flush=True)
             recorder.wait_audio()
