@@ -24,6 +24,14 @@ if __name__ == '__main__':
 
     colorama.init()
 
+    # Global variables for session management
+    accumulated_text = ""
+    session_active = False
+    session_start_time = 0
+    last_speech_time = 0
+    SESSION_DURATION = 30  # 20 seconds
+    SILENCE_INTERVAL = 2   # 2 seconds
+
     first_chunk = True
     full_sentences = []
     displayed_text = ""
@@ -75,17 +83,101 @@ if __name__ == '__main__':
         return text.ljust(columns)[-columns:]
 
     def text_detected(text):
-        global displayed_text, first_chunk
+        global displayed_text, first_chunk, accumulated_text, last_speech_time, session_active
 
-        if text != displayed_text:
-            first_chunk = False
+        if session_active and text and text != displayed_text:
+            # Update last speech time
+            last_speech_time = time.time()
+
+            # Auto-confirm previous realtime text if exists
+            if displayed_text and displayed_text not in accumulated_text:
+                accumulated_text += " " + displayed_text
+                print(f"\n[DEBUG] Auto-confirmed: '{displayed_text}'")
+
+            # Set new realtime text
             displayed_text = text
+            first_chunk = False
             add_message_to_queue("realtime", text)
 
-            message = fill_cli_line(text)
-
-            message ="└─ " + Fore.CYAN + message[:-3] + Style.RESET_ALL
+            # Display: accumulated_text + current realtime text
+            full_display = accumulated_text + " " + text if accumulated_text else text
+            message = fill_cli_line(full_display)
+            message = "└─ " + Fore.CYAN + message[:-3] + Style.RESET_ALL
             print(f"\r{message}", end='', flush=True)
+
+    def start_session():
+        global session_active, session_start_time, last_speech_time, accumulated_text, displayed_text
+
+        # End previous session if active
+        if session_active:
+            end_session()
+            time.sleep(0.5)  # Brief pause
+
+        print("\n🚀 Starting new session (20 seconds)...")
+        print("Press 1 again to start new session anytime")
+        print("-" * 50)
+
+        # RESET everything completely
+        accumulated_text = ""
+        displayed_text = ""
+        session_active = True
+        session_start_time = time.time()
+        last_speech_time = time.time()  # Important: reset this to current time
+
+        # Clear the message queue
+        while not message_queue.empty():
+            message_queue.get()
+
+        # Display empty line ready for text
+        print("└─ ", end='', flush=True)
+
+    def end_session():
+        global session_active, accumulated_text, displayed_text
+
+        if session_active:
+            # Auto-confirm any remaining realtime text
+            if displayed_text and displayed_text not in accumulated_text:
+                accumulated_text += " " + displayed_text
+                print(f"\n[DEBUG] Final confirm: '{displayed_text}'")
+
+            session_active = False
+            print(f"\n\n{'='*60}")
+            print("📝 FINAL ACCUMULATED TEXT:")
+            print(f"{'='*60}")
+            print(accumulated_text.strip() if accumulated_text.strip() else "(No speech detected)")
+            print(f"{'='*60}")
+            print("Session ended. Press 1 to start new session.")
+
+    def silence_monitor():
+        """Monitor for silence and add tokens every 2 seconds"""
+        global accumulated_text, last_speech_time, session_active, displayed_text
+
+        while True:
+            if session_active:
+                current_time = time.time()
+
+                # Check if session should end (20 seconds)
+                if current_time - session_start_time >= SESSION_DURATION:
+                    end_session()
+                    continue
+
+                # Check for silence (2 seconds without speech)
+                if current_time - last_speech_time >= SILENCE_INTERVAL:
+                    # Add silence token
+                    accumulated_text += " <silence>"
+                    last_speech_time = current_time
+
+                    # Update display
+                    full_display = accumulated_text + displayed_text
+                    message = fill_cli_line(full_display)
+                    message = "└─ " + Fore.CYAN + message[:-3] + Style.RESET_ALL
+                    print(f"\r{message}", end='', flush=True)
+
+            time.sleep(0.5)  # Check every 0.5 seconds
+
+    # Start silence monitor thread
+    silence_thread = threading.Thread(target=silence_monitor, daemon=True)
+    silence_thread.start()
 
 
     async def broadcast(message_obj):
@@ -101,11 +193,30 @@ if __name__ == '__main__':
             await asyncio.sleep(0.02)
 
     def recording_started():
-        print("\n🎤 Recording started! Voice detected.")
+        # Silent - no print
         add_message_to_queue("record_start", "")
 
+    def recording_stopped():
+        """Called when recording stops - confirm current realtime text"""
+        global displayed_text, accumulated_text, session_active, last_speech_time
+
+        if session_active and displayed_text.strip():
+            # Confirm the current realtime text
+            if accumulated_text and not accumulated_text.endswith(' '):
+                accumulated_text += " " + displayed_text.strip()
+            else:
+                accumulated_text += displayed_text.strip()
+
+            displayed_text = ""  # Clear realtime text
+            last_speech_time = time.time()  # Update speech time
+
+            # Update display with confirmed text
+            message = fill_cli_line(accumulated_text)
+            message = "└─ " + Fore.YELLOW + message[:-3] + Style.RESET_ALL
+            print(f"\r{message}", end='', flush=True)
+
     def vad_detect_started():
-        print("\n🎵 VAD detected voice!")
+        # Silent - no print
         add_message_to_queue("vad_start", "")
 
     def wakeword_detect_started():
@@ -129,49 +240,86 @@ if __name__ == '__main__':
         'realtime_processing_pause': 0.1,     # Thêm pause 0.1 giây
         'realtime_model_type': 'tiny.en',
         'on_realtime_transcription_stabilized': text_detected,
-        'on_recording_start' : recording_started,
-        'on_vad_detect_start' : vad_detect_started,
-        'on_wakeword_detection_start' : wakeword_detect_started,
-        'on_transcription_start' : transcription_started,
+        'on_recording_start': recording_started,
+        'on_recording_stop': recording_stopped,  # Add this callback
+        'on_vad_detect_start': vad_detect_started,
+        'on_wakeword_detection_start': wakeword_detect_started,
+        'on_transcription_start': transcription_started,
     }
 
     recorder = AudioToTextRecorder(**recorder_config)
 
     def transcriber_thread():
+        global accumulated_text, displayed_text, session_active, last_speech_time
+
         while True:
             start_transcription_event.wait()
-            text = "└─ transcribing ... "
-            text = fill_cli_line(text)
-            print (f"\r{text}", end='', flush=True)
-            sentence = recorder.transcribe()
-            print (Style.RESET_ALL + "\r└─ " + Fore.YELLOW + sentence + Style.RESET_ALL)
-            add_message_to_queue("full", sentence)
+
+            if session_active:
+                # Get final sentence from recorder
+                sentence = recorder.transcribe()
+
+                if sentence and sentence.strip():
+                    # Update last speech time when we get confirmed text
+                    last_speech_time = time.time()
+
+                    # Add confirmed sentence to accumulated text with space
+                    if accumulated_text and not accumulated_text.endswith(' '):
+                        accumulated_text += " " + sentence.strip()
+                    else:
+                        accumulated_text += sentence.strip()
+
+                    displayed_text = ""  # Clear realtime text since it's now confirmed
+
+                    # Display updated accumulated text
+                    message = fill_cli_line(accumulated_text)
+                    message = "└─ " + Fore.YELLOW + message[:-3] + Style.RESET_ALL
+                    print(f"\r{message}", end='', flush=True)
+
+                    add_message_to_queue("full", accumulated_text)
+
             start_transcription_event.clear()
-            if WAIT_FOR_START_COMMAND:
-                print("waiting for start command")
-                print ("└─ ... ", end='', flush=True)
+
+    def input_handler():
+        """Handle user input for starting sessions"""
+        while True:
+            try:
+                user_input = input().strip()
+                if user_input == "1":
+                    start_session()
+            except:
+                pass
 
     def recorder_thread():
-        global first_chunk
+        global first_chunk, session_active
         while True:
+            if not session_active:
+                time.sleep(0.1)
+                continue
+
             if not len(connected_clients) > 0:
                 time.sleep(0.1)
                 continue
+
             first_chunk = True
             if WAIT_FOR_START_COMMAND:
                 start_recording_event.wait()
-            print("waiting for sentence")
-            print ("└─ ... ", end='', flush=True)
+
             recorder.wait_audio()
             start_transcription_event.set()
             start_recording_event.clear()
 
+    # Start all threads
     threading.Thread(target=recorder_thread, daemon=True).start()
     threading.Thread(target=transcriber_thread, daemon=True).start()
+    threading.Thread(target=input_handler, daemon=True).start()
 
     print ("\r└─ OK")
-    print ("waiting for clients")
-    print ("└─ ... ", end='', flush=True)
+    print("🎙️ Speech-to-Text Server Ready!")
+    print("📝 Press '1' + Enter to start a 20-second session")
+    print("🔄 Press '1' again anytime to restart session")
+    print("⏰ Sessions auto-end after 20 seconds")
+    print("-" * 50)
 
     try:
         # Chạy WebSocket server trong async context
