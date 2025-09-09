@@ -15,3 +15,5 @@ pip install -r requirements.txt
 
 python .\example_webserver\server.py
 python .\example_browserclient\server.py
+
+venv\Scripts\activate && python .\example_webserver\client.py

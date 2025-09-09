@@ -83,18 +83,13 @@ if __name__ == '__main__':
         return text.ljust(columns)[-columns:]
 
     def text_detected(text):
-        global displayed_text, first_chunk, accumulated_text, last_speech_time, session_active
+        global displayed_text, first_chunk, last_speech_time, session_active
 
         if session_active and text and text != displayed_text:
             # Update last speech time
             last_speech_time = time.time()
 
-            # Auto-confirm previous realtime text if exists
-            if displayed_text and displayed_text not in accumulated_text:
-                accumulated_text += " " + displayed_text
-                print(f"\n[DEBUG] Auto-confirmed: '{displayed_text}'")
-
-            # Set new realtime text
+            # CHỈ update realtime text, KHÔNG auto-confirm
             displayed_text = text
             first_chunk = False
             add_message_to_queue("realtime", text)
@@ -191,6 +186,25 @@ if __name__ == '__main__':
                 message = message_queue.get()
                 await broadcast(message)
             await asyncio.sleep(0.02)
+
+    def recording_stopped():
+        """Called when recording stops - confirm the realtime text"""
+        global accumulated_text, displayed_text, session_active
+
+        if session_active and displayed_text:
+            # Confirm realtime text to accumulated text
+            if accumulated_text:
+                accumulated_text += " " + displayed_text
+            else:
+                accumulated_text = displayed_text
+
+            print(f"\n[CONFIRMED] '{displayed_text}'")
+            displayed_text = ""  # Clear realtime text
+
+            # Update display with confirmed text
+            message = fill_cli_line(accumulated_text)
+            message = "└─ " + Fore.YELLOW + message[:-3] + Style.RESET_ALL
+            print(f"\r{message}", end='', flush=True)
 
     def recording_started():
         # Silent - no print
